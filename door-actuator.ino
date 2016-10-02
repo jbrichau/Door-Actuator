@@ -5,8 +5,8 @@
 #define MOTOR_ENABLE_PIN D2
 #define MOTOR_SLEEP_PIN D3
 
-#define END_OF_TRAVEL_LEFT_PIN D4
-#define END_OF_TRAVEL_RIGHT_PIN D5
+#define END_OF_TRAVEL_CLOSED_PIN D4
+#define END_OF_TRAVEL_OPEN_PIN D5
 
 #define HALL_SENSOR_POWER A5
 #define HALL_SENSOR_SENSE D6
@@ -41,10 +41,11 @@ void setup() {
   digitalWrite(MOTOR_ENABLE_PIN,LOW);
   stepper.setMaxSpeed(1000*STEP_FACTOR);
   stepper.setAcceleration(300*STEP_FACTOR);
+  stepper.setPinsInverted(true,false,false);
 
   // Limit switches
-  pinMode(END_OF_TRAVEL_LEFT_PIN,INPUT_PULLDOWN);
-  pinMode(END_OF_TRAVEL_RIGHT_PIN,INPUT_PULLDOWN);
+  pinMode(END_OF_TRAVEL_CLOSED_PIN,INPUT_PULLDOWN);
+  pinMode(END_OF_TRAVEL_OPEN_PIN,INPUT_PULLDOWN);
 
   // Movement detector
   pinMode(HALL_SENSOR_POWER,OUTPUT);
@@ -55,6 +56,8 @@ void setup() {
   Particle.connect();
   Particle.variable("doorstate",doorState);
   Particle.variable("rotation",rotation_step);
+  Particle.function("opendoor",manual_open_door);
+  Particle.function("closedoor",manual_close_door);
 
   calibrate();
   doorState = STATE_CLOSED;
@@ -79,11 +82,11 @@ void loop() {
       break;
 
     case STATE_MOTORCLOSING:
-      doMotorStep(END_OF_TRAVEL_LEFT_PIN,STATE_CLOSED,true);
+      doMotorStep(END_OF_TRAVEL_CLOSED_PIN,STATE_CLOSED,true);
       break;
 
     case STATE_MOTOROPENING:
-      doMotorStep(END_OF_TRAVEL_RIGHT_PIN,STATE_OPEN,false);
+      doMotorStep(END_OF_TRAVEL_OPEN_PIN,STATE_OPEN,false);
       break;
 
     case STATE_MOTORSTALLED:
@@ -121,13 +124,27 @@ void setMotorClosing() {
   motorWake();
 }
 
+void setMotorOpening() {
+  doorState = STATE_MOTOROPENING;
+  stepper.moveTo(-2300*STEP_FACTOR);
+  previous_stepper_distance = stepper.distanceToGo();
+  rotation_step = 0;
+  previous_rotation_step = 0;
+  motorWake();
+}
+
 void setClosed() {
   doorState = STATE_CLOSED;
-  Serial.println("Closed!");
   motorSleep();
   rotation_step = 0;
   previous_rotation_step = 0;
   stepper.setCurrentPosition(0);
+}
+
+void setOpened() {
+  doorState = STATE_OPEN;
+  motorSleep();
+  schedule_close();
 }
 
 bool movement_detected() {
@@ -153,27 +170,43 @@ void auto_close_door() {
   setMotorClosing();
 }
 
+int manual_close_door(String arg) {
+  setMotorClosing();
+  return 0;
+}
+
+int manual_open_door(String arg) {
+  setMotorOpening();
+  return 0;
+}
+
 void rotation_step_detected() {
   rotation_step++;
 }
 
 void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end) {
   int end_of_travel = digitalRead(end_of_travel_pin);
-  if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
-    int current_speed = stepper.speed();
-    Serial.printlnf("Distance to go is %d at %d",stepper.distanceToGo(),stepper.currentPosition());
-    stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
-    stepper.setSpeed(current_speed);
-    previous_stepper_distance = stepper.distanceToGo();
-  }
   if(end_of_travel || (stepper.distanceToGo() == 0)) {
     doorState = nextState;
-    setClosed();
+    if(nextState == STATE_CLOSED)
+      setClosed();
+    if(nextState == STATE_OPEN)
+      setOpened();
     return;
   }
   if(previous_stepper_distance == NULL)
     previous_stepper_distance = stepper.distanceToGo();
-  stepper.run();
+
+    if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
+      int current_speed = stepper.speed();
+      Serial.printlnf("Distance to go is %d at %f",stepper.distanceToGo(),stepper.speed());
+      stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
+      stepper.setSpeed(current_speed);
+      previous_stepper_distance = stepper.distanceToGo();
+      stepper.runSpeed();
+    } else {
+      stepper.run();
+    }
   if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 100*STEP_FACTOR) {
     if(!movement_detected()) {
       setStalled(nextState);
@@ -194,16 +227,16 @@ void motorWake() {
 void calibrate() {
   motorWake();
   digitalWrite(MOTOR_DIR_PIN, LOW);
-  int end_of_travel = digitalRead(END_OF_TRAVEL_RIGHT_PIN);
+  int end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
   /*while(!end_of_travel) {
     digitalWrite(MOTOR_STEP_PIN,HIGH);
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
     delayMicroseconds(500);
-    end_of_travel = digitalRead(END_OF_TRAVEL_RIGHT_PIN);
+    end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
   };*/
-  digitalWrite(MOTOR_DIR_PIN, HIGH);
-  end_of_travel = digitalRead(END_OF_TRAVEL_LEFT_PIN);
+  digitalWrite(MOTOR_DIR_PIN, LOW);
+  end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   int steps = 0;
   rotation_step = 0;
   while(!end_of_travel) {
@@ -217,7 +250,7 @@ void calibrate() {
       rotation_step = 0;
       steps = 0;
     }
-    end_of_travel = digitalRead(END_OF_TRAVEL_LEFT_PIN);
+    end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   };
   motorSleep();
   stepper.setCurrentPosition(0);
