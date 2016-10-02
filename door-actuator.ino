@@ -20,14 +20,17 @@
 #define STATE_MOTORSTALLED 4
 #define STATE_STATICOPEN 5
 
+// Set the mode to manual to avoid Particle network busyness during motor runs
 SYSTEM_MODE(MANUAL);
 
 AccelStepper stepper(AccelStepper::DRIVER, MOTOR_STEP_PIN, MOTOR_DIR_PIN);
 Timer closer(3000, auto_close_door, true);
+
 int rotation_step = 0;
 int previous_rotation_step = 0;
-int doorState;
 int previous_stepper_distance;
+int doorState;
+
 
 void setup() {
   // Motor
@@ -47,17 +50,15 @@ void setup() {
   pinMode(HALL_SENSOR_POWER,OUTPUT);
   pinMode(HALL_SENSOR_SENSE,INPUT_PULLUP);
   digitalWrite(HALL_SENSOR_POWER,HIGH);
-  attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, FALLING, 5);
+  attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, FALLING);
 
   Particle.connect();
-  Particle.variable("position",stepper.currentPosition());
   Particle.variable("doorstate",doorState);
   Particle.variable("rotation",rotation_step);
 
   calibrate();
   doorState = STATE_CLOSED;
   Serial.begin(9600);
-  Serial.println("Door actuator ready for operation");
 }
 
 void loop() {
@@ -78,11 +79,11 @@ void loop() {
       break;
 
     case STATE_MOTORCLOSING:
-      doMotorStep(END_OF_TRAVEL_LEFT_PIN,STATE_CLOSED);
+      doMotorStep(END_OF_TRAVEL_LEFT_PIN,STATE_CLOSED,true);
       break;
 
     case STATE_MOTOROPENING:
-      doMotorStep(END_OF_TRAVEL_RIGHT_PIN,STATE_OPEN);
+      doMotorStep(END_OF_TRAVEL_RIGHT_PIN,STATE_OPEN,false);
       break;
 
     case STATE_MOTORSTALLED:
@@ -126,12 +127,13 @@ void setClosed() {
   motorSleep();
   rotation_step = 0;
   previous_rotation_step = 0;
+  stepper.setCurrentPosition(0);
 }
 
 bool movement_detected() {
   bool movement = rotation_step > previous_rotation_step;
-  if(movement)
-    Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
+  //if(movement)
+  //  Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
   previous_rotation_step = rotation_step;
   return movement;
 }
@@ -155,8 +157,15 @@ void rotation_step_detected() {
   rotation_step++;
 }
 
-void doMotorStep(int end_of_travel_pin, int nextState) {
+void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end) {
   int end_of_travel = digitalRead(end_of_travel_pin);
+  if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
+    int current_speed = stepper.speed();
+    Serial.printlnf("Distance to go is %d at %d",stepper.distanceToGo(),stepper.currentPosition());
+    stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
+    stepper.setSpeed(current_speed);
+    previous_stepper_distance = stepper.distanceToGo();
+  }
   if(end_of_travel || (stepper.distanceToGo() == 0)) {
     doorState = nextState;
     setClosed();
@@ -165,11 +174,10 @@ void doMotorStep(int end_of_travel_pin, int nextState) {
   if(previous_stepper_distance == NULL)
     previous_stepper_distance = stepper.distanceToGo();
   stepper.run();
-  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 200*STEP_FACTOR) {
-    Serial.printlnf("Checking movement at distance to go:%d",stepper.distanceToGo());
+  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 100*STEP_FACTOR) {
     if(!movement_detected()) {
       setStalled(nextState);
-      Serial.println("Stall!");
+      Serial.printlnf("Stall detected at position %d",stepper.currentPosition());
     }
     previous_stepper_distance = stepper.distanceToGo();
   }
