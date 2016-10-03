@@ -1,4 +1,5 @@
 #include "AccelStepperSpark.h"
+#include "SparkFunMAX17043.h"
 
 // Need to keep D0 and D1 free for the battery shield
 #define MOTOR_DIR_PIN A0
@@ -33,6 +34,9 @@ int previous_rotation_step = 0;
 int previous_stepper_distance;
 int doorState;
 
+//double voltage = 0; // Variable to keep track of LiPo voltage
+double soc = 0; // Variable to keep track of LiPo state-of-charge (SOC)
+bool alert; // Variable to keep track of whether alert has been triggered
 
 void setup() {
   // Motor
@@ -55,9 +59,18 @@ void setup() {
   digitalWrite(HALL_SENSOR_POWER,HIGH);
   attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, FALLING);
 
+  lipo.begin(); // Initialize the MAX17043 LiPo fuel gauge
+  // Quick start restarts the MAX17043 in hopes of getting a more accurate
+  // guess for the SOC.
+  lipo.quickStart();
+  // We can set an interrupt to alert when the battery SoC gets too low.
+  // We can alert at anywhere between 1% - 32%:
+  //lipo.setThreshold(10); // Set alert threshold to 20%.
+
   Particle.connect();
   Particle.variable("doorstate",doorState);
   Particle.variable("rotation",rotation_step);
+  Particle.variable("soc",soc);
   Particle.function("opendoor",manual_open_door);
   Particle.function("closedoor",manual_close_door);
 
@@ -75,12 +88,14 @@ void loop() {
         doorState = STATE_OPEN;
       }
       Particle.process();
+      soc = lipo.getSOC();
       break;
 
     case STATE_OPEN:
       if(movement_detected())
         schedule_close();
       Particle.process();
+      soc = lipo.getSOC();
       break;
 
     case STATE_MOTORCLOSING:
@@ -95,10 +110,12 @@ void loop() {
       if(movement_detected())
         schedule_close();
       Particle.process();
+      soc = lipo.getSOC();
       break;
 
     case STATE_STATICOPEN:
       Particle.process();
+      soc = lipo.getSOC();
       break;
   }
 }
@@ -200,6 +217,7 @@ void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end
     previous_stepper_distance = stepper.distanceToGo();
 
     if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
+      // TODO: does not work on motor opening
       int current_speed = stepper.speed();
       Serial.printlnf("Distance to go is %d at %f",stepper.distanceToGo(),stepper.speed());
       stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
