@@ -1,17 +1,19 @@
 #include "AccelStepperSpark.h"
 
-#define MOTOR_DIR_PIN D0
-#define MOTOR_STEP_PIN D1
+// Need to keep D0 and D1 free for the battery shield
+#define MOTOR_DIR_PIN A0
+#define MOTOR_STEP_PIN A1
 #define MOTOR_ENABLE_PIN D2
 #define MOTOR_SLEEP_PIN D3
+#define MOTOR_FAULT_PIN A3
 
 #define END_OF_TRAVEL_CLOSED_PIN D4
 #define END_OF_TRAVEL_OPEN_PIN D5
 
 #define HALL_SENSOR_POWER A5
-#define HALL_SENSOR_SENSE D6
+#define HALL_SENSOR_SENSE A4
 
-#define STEP_FACTOR 4
+#define STEP_FACTOR 2
 
 #define STATE_CLOSED 0
 #define STATE_OPEN 1
