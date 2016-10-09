@@ -31,6 +31,7 @@ Timer closer(3000, auto_close_door, true);
 
 int rotation_step = 0;
 int previous_rotation_step = 0;
+int rotation_steps_per_motorrotation = 4;
 int previous_stepper_distance;
 int doorState;
 
@@ -46,7 +47,7 @@ void setup() {
   pinMode(MOTOR_ENABLE_PIN,OUTPUT);
   digitalWrite(MOTOR_ENABLE_PIN,LOW);
   stepper.setMaxSpeed(1000*STEP_FACTOR);
-  stepper.setAcceleration(300*STEP_FACTOR);
+  stepper.setAcceleration(500*STEP_FACTOR);
   stepper.setPinsInverted(true,false,false);
 
   // Limit switches
@@ -57,7 +58,7 @@ void setup() {
   pinMode(HALL_SENSOR_POWER,OUTPUT);
   pinMode(HALL_SENSOR_SENSE,INPUT_PULLUP);
   digitalWrite(HALL_SENSOR_POWER,HIGH);
-  attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, FALLING);
+  attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, RISING);
 
   lipo.begin(); // Initialize the MAX17043 LiPo fuel gauge
   // Quick start restarts the MAX17043 in hopes of getting a more accurate
@@ -133,9 +134,9 @@ void setStalled(int nextState) {
 
 void setMotorClosing() {
   doorState = STATE_MOTORCLOSING;
-  Serial.printlnf("Closing door from rotation step %d, position %d",rotation_step,-(rotation_step/3)*STEP_FACTOR*200);
+  Serial.printlnf("Closing door from rotation step %d, position %d",rotation_step,-(rotation_step/rotation_steps_per_motorrotation)*STEP_FACTOR*200);
   if(stepper.currentPosition() == 0)
-    stepper.setCurrentPosition(-(rotation_step/3)*STEP_FACTOR*200);
+    stepper.setCurrentPosition(-(rotation_step/rotation_steps_per_motorrotation)*STEP_FACTOR*200);
   stepper.moveTo(0);
   previous_stepper_distance = stepper.distanceToGo();
   rotation_step = 0;
@@ -168,8 +169,8 @@ void setOpened() {
 
 bool movement_detected() {
   bool movement = rotation_step > previous_rotation_step;
-  //if(movement)
-  //  Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
+  if(movement)
+    Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
   previous_rotation_step = rotation_step;
   return movement;
 }
@@ -227,7 +228,7 @@ void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end
     } else {
       stepper.run();
     }
-  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 100*STEP_FACTOR) {
+  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 75*STEP_FACTOR) {
     if(!movement_detected()) {
       setStalled(nextState);
       Serial.printlnf("Stall detected at position %d",stepper.currentPosition());
@@ -246,15 +247,15 @@ void motorWake() {
 
 void calibrate() {
   motorWake();
-  digitalWrite(MOTOR_DIR_PIN, LOW);
+  digitalWrite(MOTOR_DIR_PIN, HIGH);
   int end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
-  /*while(!end_of_travel) {
+  while(!end_of_travel) {
     digitalWrite(MOTOR_STEP_PIN,HIGH);
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
     delayMicroseconds(500);
     end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
-  };*/
+  };
   digitalWrite(MOTOR_DIR_PIN, LOW);
   end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   int steps = 0;
