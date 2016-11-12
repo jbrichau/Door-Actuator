@@ -14,6 +14,15 @@
 #define HALL_SENSOR_POWER A5
 #define HALL_SENSOR_SENSE A4
 
+#define ENCODER_A_PIN A4
+#define ENCODER_B_PIN A5
+
+#define ENCODER_MAGDEC_PIN RX
+#define ENCODER_MAGINC_PIN TX
+
+#define SONARPIN A2
+#define AVR_RANGE 60
+
 #define STEP_FACTOR 2
 
 #define STATE_CLOSED 0
@@ -31,7 +40,7 @@ Timer closer(3000, auto_close_door, true);
 
 int rotation_step = 0;
 int previous_rotation_step = 0;
-int rotation_steps_per_motorrotation = 4;
+int rotation_steps_per_motorrotation = 7;
 int previous_stepper_distance;
 int doorState;
 
@@ -55,10 +64,11 @@ void setup() {
   pinMode(END_OF_TRAVEL_OPEN_PIN,INPUT_PULLDOWN);
 
   // Movement detector
-  pinMode(HALL_SENSOR_POWER,OUTPUT);
-  pinMode(HALL_SENSOR_SENSE,INPUT_PULLUP);
-  digitalWrite(HALL_SENSOR_POWER,HIGH);
-  attachInterrupt(HALL_SENSOR_SENSE, rotation_step_detected, RISING);
+  pinMode(ENCODER_A_PIN, INPUT_PULLDOWN);
+  pinMode(ENCODER_B_PIN, INPUT_PULLDOWN);
+  pinMode(ENCODER_MAGDEC_PIN, INPUT_PULLUP);
+  pinMode(ENCODER_MAGINC_PIN, INPUT_PULLUP);
+  attachInterrupt(ENCODER_A_PIN, read_quadrature, CHANGE);
 
   lipo.begin(); // Initialize the MAX17043 LiPo fuel gauge
   // Quick start restarts the MAX17043 in hopes of getting a more accurate
@@ -75,8 +85,13 @@ void setup() {
   Particle.function("opendoor",manual_open_door);
   Particle.function("closedoor",manual_close_door);
 
+  if (Particle.connected() == false) {
+    Particle.connect();
+  }
   calibrate();
-  doorState = STATE_CLOSED;
+  //doorState = STATE_OPEN;
+  //schedule_close();
+  //stepper.setCurrentPosition(0);
   Serial.begin(9600);
 }
 
@@ -88,19 +103,21 @@ void loop() {
         schedule_close();
         doorState = STATE_OPEN;
       }
-      Particle.process();
-      soc = lipo.getSOC();
+      idle_tasks();
       break;
 
     case STATE_OPEN:
       if(movement_detected())
         schedule_close();
-      Particle.process();
-      soc = lipo.getSOC();
+      idle_tasks();
       break;
 
     case STATE_MOTORCLOSING:
       doMotorStep(END_OF_TRAVEL_CLOSED_PIN,STATE_CLOSED,true);
+      /*if(analogRead(SONARPIN) < 188) {
+        //Serial.printlnf("Detected presence at %dcm. stop closing door.",prox);
+        setMotorOpening();
+      }*/
       break;
 
     case STATE_MOTOROPENING:
@@ -110,15 +127,48 @@ void loop() {
     case STATE_MOTORSTALLED:
       if(movement_detected())
         schedule_close();
-      Particle.process();
-      soc = lipo.getSOC();
+      idle_tasks();
       break;
 
     case STATE_STATICOPEN:
-      Particle.process();
-      soc = lipo.getSOC();
+      idle_tasks();
       break;
   }
+}
+
+void idle_tasks() {
+  int prox;
+
+  if(Particle.connected())
+    Particle.process();
+  else
+    Particle.connect();
+
+  soc = lipo.getSOC();
+  prox = proximity(AVR_RANGE,10);
+  if(prox < 60 && doorState == STATE_CLOSED) {
+    Serial.printlnf("Detected presence at %dcm. Opening door.",prox);
+    setMotorOpening();
+  }
+}
+
+int proximity(int average_range,int delay_ms) {
+  int sum=0, inches=0, cm=0;
+
+  for (int i = 0; i < average_range ; i++) {
+     //Used to read in the analog voltage output that is being sent by the MaxSonar device.
+     //Scale factor is (Vcc/512) per inch. A 3.3V supply yields ~6.4mV/in
+     //Photon analog pin goes from 0 to 4095, so divide by 8
+     int anVolt;
+
+     anVolt = analogRead(SONARPIN) / 8;
+     sum += anVolt;
+     if(delay_ms > 0) delay(delay_ms);
+   }
+
+   inches = sum / average_range;
+   cm = inches * 2.54;
+   return cm;
 }
 
 void setStalled(int nextState) {
@@ -146,7 +196,7 @@ void setMotorClosing() {
 
 void setMotorOpening() {
   doorState = STATE_MOTOROPENING;
-  stepper.moveTo(-2300*STEP_FACTOR);
+  stepper.moveTo(-3000*STEP_FACTOR);
   previous_stepper_distance = stepper.distanceToGo();
   rotation_step = 0;
   previous_rotation_step = 0;
@@ -167,8 +217,30 @@ void setOpened() {
   schedule_close();
 }
 
+void read_quadrature()
+{
+  // found a low-to-high on channel A
+  if (digitalRead(ENCODER_A_PIN) == HIGH)
+  {
+    // check channel B to see which way
+    if (digitalRead(ENCODER_B_PIN) == LOW)
+        rotation_step++;
+    else
+        rotation_step--;
+  }
+  // found a high-to-low on channel A
+  else
+  {
+    // check channel B to see which way
+    if (digitalRead(ENCODER_B_PIN) == LOW)
+        rotation_step--;
+    else
+        rotation_step++;
+  }
+}
+
 bool movement_detected() {
-  bool movement = rotation_step > previous_rotation_step;
+  bool movement = abs(rotation_step - previous_rotation_step) > 5;
   if(movement)
     Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
   previous_rotation_step = rotation_step;
@@ -197,11 +269,8 @@ int manual_close_door(String arg) {
 
 int manual_open_door(String arg) {
   setMotorOpening();
+  Particle.publish("manual-opendoor",NULL,60,PRIVATE);
   return 0;
-}
-
-void rotation_step_detected() {
-  rotation_step++;
 }
 
 void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end) {
@@ -253,7 +322,7 @@ void calibrate() {
     digitalWrite(MOTOR_STEP_PIN,HIGH);
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
-    delayMicroseconds(500);
+    delayMicroseconds(1000);
     end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
   };
   digitalWrite(MOTOR_DIR_PIN, LOW);
@@ -265,9 +334,10 @@ void calibrate() {
     steps++;
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
-    delayMicroseconds(500);
+    delayMicroseconds(1000);
     if (steps == (200*STEP_FACTOR)) {
-      Serial.printlnf("Motor rotation corresponds to %d pulley rotation steps",rotation_step);
+      Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_step);
+      rotation_steps_per_motorrotation = rotation_step;
       rotation_step = 0;
       steps = 0;
     }
