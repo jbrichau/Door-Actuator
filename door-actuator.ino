@@ -24,6 +24,7 @@
 #define AVR_RANGE 60
 
 #define STEP_FACTOR 2
+#define STEPPER_STEPS 200
 
 #define STATE_CLOSED 0
 #define STATE_OPEN 1
@@ -99,7 +100,7 @@ void loop() {
   switch(doorState) {
 
     case STATE_CLOSED:
-      if(movement_detected()) {
+      if(movement_detected(10)) {
         schedule_close();
         doorState = STATE_OPEN;
       }
@@ -107,7 +108,7 @@ void loop() {
       break;
 
     case STATE_OPEN:
-      if(movement_detected())
+      if(movement_detected(10))
         schedule_close();
       idle_tasks();
       break;
@@ -125,7 +126,7 @@ void loop() {
       break;
 
     case STATE_MOTORSTALLED:
-      if(movement_detected())
+      if(movement_detected(10))
         schedule_close();
       idle_tasks();
       break;
@@ -147,9 +148,11 @@ void idle_tasks() {
   soc = lipo.getSOC();
   prox = proximity(AVR_RANGE,10);
   if(prox < 60 && doorState == STATE_CLOSED) {
-    Serial.printlnf("Detected presence at %dcm. Opening door.",prox);
+    //Serial.printlnf("Detected presence at %dcm. Opening door.",prox);
     setMotorOpening();
   }
+
+  Serial.printlnf("position: %d, rotation_step: %d",stepper.currentPosition(), rotation_step);
 }
 
 int proximity(int average_range,int delay_ms) {
@@ -173,24 +176,25 @@ int proximity(int average_range,int delay_ms) {
 
 void setStalled(int nextState) {
   doorState = STATE_MOTORSTALLED;
-  motorSleep();
   Serial.println("Motor stalled");
-  stepper.setCurrentPosition(stepper.currentPosition());
+  /*if(nextState == STATE_CLOSED)
+    stepper.setCurrentPosition(stepper.currentPosition()+100);
+  else
+    stepper.setCurrentPosition(stepper.currentPosition()-100);*/
+  motorSleep();
+  //stepper.setCurrentPosition(stepper.currentPosition());
   if(nextState == STATE_CLOSED)
     schedule_close();
-  //rotation_step = 0;
-  //previous_rotation_step = 0;
 }
 
 void setMotorClosing() {
   doorState = STATE_MOTORCLOSING;
-  Serial.printlnf("Closing door from rotation step %d, position %d",rotation_step,-(rotation_step/rotation_steps_per_motorrotation)*STEP_FACTOR*200);
+  float position = ((float)rotation_step / rotation_steps_per_motorrotation)*STEP_FACTOR*STEPPER_STEPS;
+  Serial.printlnf("Closing from position: %f",position);
   if(stepper.currentPosition() == 0)
-    stepper.setCurrentPosition(-(rotation_step/rotation_steps_per_motorrotation)*STEP_FACTOR*200);
+    stepper.setCurrentPosition(-(int)position);
   stepper.moveTo(0);
   previous_stepper_distance = stepper.distanceToGo();
-  rotation_step = 0;
-  previous_rotation_step = 0;
   motorWake();
 }
 
@@ -198,17 +202,15 @@ void setMotorOpening() {
   doorState = STATE_MOTOROPENING;
   stepper.moveTo(-3000*STEP_FACTOR);
   previous_stepper_distance = stepper.distanceToGo();
-  rotation_step = 0;
-  previous_rotation_step = 0;
   motorWake();
 }
 
 void setClosed() {
   doorState = STATE_CLOSED;
   motorSleep();
+  stepper.setCurrentPosition(0);
   rotation_step = 0;
   previous_rotation_step = 0;
-  stepper.setCurrentPosition(0);
 }
 
 void setOpened() {
@@ -239,11 +241,14 @@ void read_quadrature()
   }
 }
 
-bool movement_detected() {
-  bool movement = abs(rotation_step - previous_rotation_step) > 5;
-  if(movement)
-    Serial.printlnf("Movement detected of %d steps",rotation_step - previous_rotation_step);
-  previous_rotation_step = rotation_step;
+bool movement_detected(int steps) {
+  bool movement = abs(rotation_step - previous_rotation_step) > steps;
+  if(movement) {
+    //Serial.printlnf("Movement detected of %d > %d",rotation_step - previous_rotation_step,steps);
+    previous_rotation_step = rotation_step;
+  }
+  //else
+    //Serial.printlnf("No movement detected: %d < %d", rotation_step - previous_rotation_step,steps);
   return movement;
 }
 
@@ -286,19 +291,20 @@ void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end
   if(previous_stepper_distance == NULL)
     previous_stepper_distance = stepper.distanceToGo();
 
-    if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
-      // TODO: does not work on motor opening
-      int current_speed = stepper.speed();
-      Serial.printlnf("Distance to go is %d at %f",stepper.distanceToGo(),stepper.speed());
-      stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
-      stepper.setSpeed(current_speed);
-      previous_stepper_distance = stepper.distanceToGo();
-      stepper.runSpeed();
-    } else {
-      stepper.run();
-    }
-  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 75*STEP_FACTOR) {
-    if(!movement_detected()) {
+  if(should_travel_to_end && stepper.distanceToGo() < 50*STEP_FACTOR) {
+    // TODO: does not work on motor opening
+    int current_speed = stepper.speed();
+    Serial.printlnf("Distance to go is %d at %f",stepper.distanceToGo(),stepper.speed());
+    stepper.moveTo(stepper.targetPosition()+(50*STEP_FACTOR));
+    stepper.setSpeed(current_speed);
+    previous_stepper_distance = stepper.distanceToGo();
+    stepper.runSpeed();
+  } else {
+    stepper.run();
+  }
+
+  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 50*STEP_FACTOR) {
+    if(!movement_detected(10)) {
       setStalled(nextState);
       Serial.printlnf("Stall detected at position %d",stepper.currentPosition());
     }
@@ -328,17 +334,16 @@ void calibrate() {
   digitalWrite(MOTOR_DIR_PIN, LOW);
   end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   int steps = 0;
-  rotation_step = 0;
   while(!end_of_travel) {
     digitalWrite(MOTOR_STEP_PIN,HIGH);
     steps++;
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
     delayMicroseconds(1000);
-    if (steps == (200*STEP_FACTOR)) {
-      Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_step);
-      rotation_steps_per_motorrotation = rotation_step;
-      rotation_step = 0;
+    if (steps == (STEPPER_STEPS*STEP_FACTOR)) {
+      Serial.printlnf("Motor rotation corresponds to %d rotation steps",abs(rotation_step - abs(previous_rotation_step)));
+      rotation_steps_per_motorrotation = abs(rotation_step - abs(previous_rotation_step));
+      previous_rotation_step = rotation_step;
       steps = 0;
     }
     end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
