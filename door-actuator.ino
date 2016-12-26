@@ -44,6 +44,7 @@ int previous_rotation_step = 0;
 int rotation_steps_per_motorrotation = 7;
 int previous_stepper_distance;
 int doorState;
+int autoopen_position = 0;
 
 //double voltage = 0; // Variable to keep track of LiPo voltage
 double soc = 0; // Variable to keep track of LiPo state-of-charge (SOC)
@@ -64,7 +65,7 @@ void setup() {
   pinMode(END_OF_TRAVEL_CLOSED_PIN,INPUT_PULLDOWN);
   pinMode(END_OF_TRAVEL_OPEN_PIN,INPUT_PULLDOWN);
 
-  // Movement detector
+  // Door movement detector
   pinMode(ENCODER_A_PIN, INPUT_PULLDOWN);
   pinMode(ENCODER_B_PIN, INPUT_PULLDOWN);
   pinMode(ENCODER_MAGDEC_PIN, INPUT_PULLUP);
@@ -89,46 +90,46 @@ void setup() {
   if (Particle.connected() == false) {
     Particle.connect();
   }
+  Serial.begin(9600);
   calibrate();
   //doorState = STATE_OPEN;
-  //schedule_close();
+  //schedule_autoclose();
   //stepper.setCurrentPosition(0);
-  Serial.begin(9600);
 }
 
 void loop() {
   switch(doorState) {
 
     case STATE_CLOSED:
+      if(proximity(AVR_RANGE,10) < 60) {
+        setMotorOpening();
+        break;
+      }
       if(movement_detected(10)) {
-        schedule_close();
+        schedule_autoclose();
         doorState = STATE_OPEN;
       }
       idle_tasks();
       break;
 
     case STATE_OPEN:
-      if(movement_detected(10))
-        schedule_close();
+      if(proximity(AVR_RANGE,10) < 60 || movement_detected(10))
+        schedule_autoclose();
+        idle_tasks();
+      break;
+
+    case STATE_MOTORSTALLED:
+      if(proximity(AVR_RANGE,10) < 60 || movement_detected(10))
+        schedule_autoclose();
       idle_tasks();
       break;
 
     case STATE_MOTORCLOSING:
       doMotorStep(END_OF_TRAVEL_CLOSED_PIN,STATE_CLOSED,true);
-      /*if(analogRead(SONARPIN) < 188) {
-        //Serial.printlnf("Detected presence at %dcm. stop closing door.",prox);
-        setMotorOpening();
-      }*/
       break;
 
     case STATE_MOTOROPENING:
       doMotorStep(END_OF_TRAVEL_OPEN_PIN,STATE_OPEN,false);
-      break;
-
-    case STATE_MOTORSTALLED:
-      if(movement_detected(10))
-        schedule_close();
-      idle_tasks();
       break;
 
     case STATE_STATICOPEN:
@@ -138,7 +139,6 @@ void loop() {
 }
 
 void idle_tasks() {
-  int prox;
 
   if(Particle.connected())
     Particle.process();
@@ -146,13 +146,7 @@ void idle_tasks() {
     Particle.connect();
 
   soc = lipo.getSOC();
-  prox = proximity(AVR_RANGE,10);
-  if(prox < 60 && doorState == STATE_CLOSED) {
-    //Serial.printlnf("Detected presence at %dcm. Opening door.",prox);
-    setMotorOpening();
-  }
-
-  Serial.printlnf("position: %d, rotation_step: %d",stepper.currentPosition(), rotation_step);
+  Serial.printlnf("position: %d, rotation_step: %d, previous_rotation_step: %d",stepper.currentPosition(), rotation_step, previous_rotation_step);
 }
 
 int proximity(int average_range,int delay_ms) {
@@ -178,19 +172,23 @@ void setStalled(int nextState) {
   doorState = STATE_MOTORSTALLED;
   Serial.println("Motor stalled");
   /*if(nextState == STATE_CLOSED)
-    stepper.setCurrentPosition(stepper.currentPosition()+100);
+    stepper.setCurrentPosition(stepper.currentPosition()-100);
   else
-    stepper.setCurrentPosition(stepper.currentPosition()-100);*/
+    stepper.setCurrentPosition(stepper.currentPosition()+100);
+
+  for(int i=0; i < STEP_FACTOR*100; i++)
+    doMotorStep(END_OF_TRAVEL_OPEN_PIN,nextState,false); */
   motorSleep();
-  //stepper.setCurrentPosition(stepper.currentPosition());
+  // The following statement is necessary to reset the speed of the stepper
+  stepper.setCurrentPosition(stepper.currentPosition());
   if(nextState == STATE_CLOSED)
-    schedule_close();
+    schedule_autoclose();
 }
 
 void setMotorClosing() {
   doorState = STATE_MOTORCLOSING;
   float position = ((float)rotation_step / rotation_steps_per_motorrotation)*STEP_FACTOR*STEPPER_STEPS;
-  Serial.printlnf("Closing from position: %f",position);
+  Serial.printlnf("Closing from position: %d",(int)position);
   if(stepper.currentPosition() == 0)
     stepper.setCurrentPosition(-(int)position);
   stepper.moveTo(0);
@@ -200,7 +198,7 @@ void setMotorClosing() {
 
 void setMotorOpening() {
   doorState = STATE_MOTOROPENING;
-  stepper.moveTo(-3000*STEP_FACTOR);
+  stepper.moveTo(-autoopen_position);
   previous_stepper_distance = stepper.distanceToGo();
   motorWake();
 }
@@ -216,7 +214,8 @@ void setClosed() {
 void setOpened() {
   doorState = STATE_OPEN;
   motorSleep();
-  schedule_close();
+  schedule_autoclose();
+  previous_rotation_step = abs(rotation_step);
 }
 
 void read_quadrature()
@@ -242,17 +241,18 @@ void read_quadrature()
 }
 
 bool movement_detected(int steps) {
-  bool movement = abs(rotation_step - previous_rotation_step) > steps;
+  bool movement = abs(abs(rotation_step) - previous_rotation_step) > steps;
   if(movement) {
-    //Serial.printlnf("Movement detected of %d > %d",rotation_step - previous_rotation_step,steps);
-    previous_rotation_step = rotation_step;
+    Serial.printlnf("Movement detected of %d > %d",abs(rotation_step) - previous_rotation_step,steps);
+    previous_rotation_step = abs(rotation_step);
   }
-  //else
-    //Serial.printlnf("No movement detected: %d < %d", rotation_step - previous_rotation_step,steps);
+  else
+    Serial.printlnf("No movement detected: %d < %d",abs(rotation_step) - previous_rotation_step,steps);
   return movement;
 }
 
-void schedule_close() {
+// Function to schedule an automatic close, or to reschedule an existing autoclose
+void schedule_autoclose() {
   if(closer.isActive()) {
     Serial.println("Reseting autoclose");
     closer.reset();
@@ -303,7 +303,7 @@ void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end
     stepper.run();
   }
 
-  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 50*STEP_FACTOR) {
+  if(abs((stepper.distanceToGo() - previous_stepper_distance)) > 20*STEP_FACTOR) {
     if(!movement_detected(10)) {
       setStalled(nextState);
       Serial.printlnf("Stall detected at position %d",stepper.currentPosition());
@@ -321,33 +321,66 @@ void motorWake() {
 }
 
 void calibrate() {
+  int measurements = 0;
+  bool stalled = false;
+  int steps = 0;
+  int end_of_travel;
+
   motorWake();
-  digitalWrite(MOTOR_DIR_PIN, HIGH);
-  int end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
-  while(!end_of_travel) {
-    digitalWrite(MOTOR_STEP_PIN,HIGH);
-    delayMicroseconds(2);
-    digitalWrite(MOTOR_STEP_PIN,LOW);
-    delayMicroseconds(1000);
-    end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
-  };
+
+  // First, close the door
   digitalWrite(MOTOR_DIR_PIN, LOW);
   end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
-  int steps = 0;
   while(!end_of_travel) {
     digitalWrite(MOTOR_STEP_PIN,HIGH);
-    steps++;
     delayMicroseconds(2);
     digitalWrite(MOTOR_STEP_PIN,LOW);
     delayMicroseconds(1000);
+    end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
+  };
+
+  rotation_step = 0;
+  previous_rotation_step = 0;
+
+  // Next, open the door to its maximum position
+  digitalWrite(MOTOR_DIR_PIN, HIGH);
+  end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
+  while(!(end_of_travel || stalled)) {
+    digitalWrite(MOTOR_STEP_PIN,HIGH);
+    delayMicroseconds(2);
+    digitalWrite(MOTOR_STEP_PIN,LOW);
+    delayMicroseconds(1000);
+    steps++;
+    if(steps % 20*STEP_FACTOR == 0) {
+      Serial.printlnf("rotation_step: %d, previous_rotation_step: %d", rotation_step, previous_rotation_step);
+      stalled = !movement_detected(10);
+      if(stalled) Serial.printlnf("Stalled during calibrate at pos %d",steps);
+    }
+    end_of_travel = digitalRead(END_OF_TRAVEL_OPEN_PIN);
+  };
+
+  autoopen_position = steps;
+
+  // Finally, close the door
+  digitalWrite(MOTOR_DIR_PIN, LOW);
+  end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
+  steps = 0;
+  while(!end_of_travel) {
+    digitalWrite(MOTOR_STEP_PIN,HIGH);
+    delayMicroseconds(2);
+    digitalWrite(MOTOR_STEP_PIN,LOW);
+    delayMicroseconds(1000);
+    steps++;
     if (steps == (STEPPER_STEPS*STEP_FACTOR)) {
-      Serial.printlnf("Motor rotation corresponds to %d rotation steps",abs(rotation_step - abs(previous_rotation_step)));
-      rotation_steps_per_motorrotation = abs(rotation_step - abs(previous_rotation_step));
-      previous_rotation_step = rotation_step;
+      measurements++;
+      rotation_steps_per_motorrotation = abs(rotation_step - previous_rotation_step);
+      Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_steps_per_motorrotation);
+      previous_rotation_step = abs(rotation_step);
       steps = 0;
     }
     end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   };
+
   motorSleep();
-  stepper.setCurrentPosition(0);
+  setClosed();
 }
