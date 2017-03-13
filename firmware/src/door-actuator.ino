@@ -1,4 +1,4 @@
-#include "AccelStepperSpark.h"
+#include "AccelStepper.h"
 #include "SparkFunMAX17043.h"
 
 // Need to keep D0 and D1 free for the battery shield
@@ -86,6 +86,7 @@ void setup() {
   Particle.variable("soc",soc);
   Particle.function("opendoor",manual_open_door);
   Particle.function("closedoor",manual_close_door);
+  Particle.function("calibrate",manual_calibrate);
 
   if (Particle.connected() == false) {
     Particle.connect();
@@ -277,6 +278,11 @@ int manual_open_door(String arg) {
   return 0;
 }
 
+int manual_calibrate(String arg) {
+  calibrate();
+  return 0;
+}
+
 void doMotorStep(int end_of_travel_pin, int nextState, bool should_travel_to_end) {
   int end_of_travel = digitalRead(end_of_travel_pin);
   if(end_of_travel || (stepper.distanceToGo() == 0)) {
@@ -374,10 +380,12 @@ void calibrate() {
     }
     end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   };
+  /*
   rotation_steps_per_motorrotation = rotation_steps_per_motorrotation / measurements;
   Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_steps_per_motorrotation);
   autoopen_position = ((double)autoopen_position / rotation_steps_per_motorrotation) * STEP_FACTOR * STEPPER_STEPS;
   Serial.printlnf("Auto open position set to %d ",autoopen_position);
+*/
   motorSleep();
   setClosed();
 }
