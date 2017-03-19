@@ -20,6 +20,9 @@
 #define ENCODER_MAGDEC_PIN RX
 #define ENCODER_MAGINC_PIN TX
 
+#define LED_PIN D7
+#define BTN_PIN D6
+
 #define SONARPIN A2
 #define AVR_RANGE 60
 
@@ -44,6 +47,7 @@ int previous_rotation_step = 0;
 int rotation_steps_per_motorrotation = 0;
 int previous_stepper_distance;
 int doorState;
+bool buttonState = false;
 int autoopen_position = 0;
 
 //double voltage = 0; // Variable to keep track of LiPo voltage
@@ -72,6 +76,12 @@ void setup() {
   pinMode(ENCODER_MAGINC_PIN, INPUT_PULLUP);
   attachInterrupt(ENCODER_A_PIN, read_quadrature, CHANGE);
 
+  // LED button
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  pinMode(BTN_PIN, INPUT_PULLDOWN);
+  attachInterrupt(BTN_PIN, button_pushed, RISING);
+
   lipo.begin(); // Initialize the MAX17043 LiPo fuel gauge
   // Quick start restarts the MAX17043 in hopes of getting a more accurate
   // guess for the SOC.
@@ -99,7 +109,8 @@ void setup() {
 }
 
 void loop() {
-  switch(doorState) {
+  if(!buttonState) {
+    switch(doorState) {
 
     case STATE_CLOSED:
       if(proximity(AVR_RANGE,10) < 60) {
@@ -136,7 +147,9 @@ void loop() {
     case STATE_STATICOPEN:
       idle_tasks();
       break;
+    }
   }
+  else idle_tasks();
 }
 
 void idle_tasks() {
@@ -147,6 +160,14 @@ void idle_tasks() {
 
   soc = lipo.getSOC();
   //Serial.printlnf("position: %d, rotation_step: %d, previous_rotation_step: %d",stepper.currentPosition(), rotation_step, previous_rotation_step);
+}
+
+void button_pushed() {
+  buttonState = !buttonState;
+  if(buttonState)
+    digitalWrite(LED_PIN, HIGH);
+  else
+    digitalWrite(LED_PIN, LOW);
 }
 
 int proximity(int average_range,int delay_ms) {
@@ -380,12 +401,13 @@ void calibrate() {
     }
     end_of_travel = digitalRead(END_OF_TRAVEL_CLOSED_PIN);
   };
-  /*
-  rotation_steps_per_motorrotation = rotation_steps_per_motorrotation / measurements;
-  Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_steps_per_motorrotation);
-  autoopen_position = ((double)autoopen_position / rotation_steps_per_motorrotation) * STEP_FACTOR * STEPPER_STEPS;
-  Serial.printlnf("Auto open position set to %d ",autoopen_position);
-*/
+  if(measurements != 0) {
+    rotation_steps_per_motorrotation = rotation_steps_per_motorrotation / measurements;
+    Serial.printlnf("Motor rotation corresponds to %d rotation steps",rotation_steps_per_motorrotation);
+    autoopen_position = ((double)autoopen_position / rotation_steps_per_motorrotation) * STEP_FACTOR * STEPPER_STEPS;
+    Serial.printlnf("Auto open position set to %d ",autoopen_position);
+  }
+
   motorSleep();
   setClosed();
 }
