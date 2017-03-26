@@ -25,6 +25,7 @@
 
 #define SONARPIN A2
 #define AVR_RANGE 60
+#define PROX_ACTIVE_RNG 150
 
 #define STEP_FACTOR 2
 #define STEPPER_STEPS 200
@@ -97,6 +98,7 @@ void setup() {
   Particle.function("opendoor",manual_open_door);
   Particle.function("closedoor",manual_close_door);
   Particle.function("calibrate",manual_calibrate);
+  Particle.function("proximity",measure_proximity);
 
   if (Particle.connected() == false) {
     Particle.connect();
@@ -113,7 +115,7 @@ void loop() {
     switch(doorState) {
 
     case STATE_CLOSED:
-      if(proximity(AVR_RANGE,10) < 60) {
+      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG) {
         setMotorOpening();
         break;
       }
@@ -125,13 +127,13 @@ void loop() {
       break;
 
     case STATE_OPEN:
-      if(proximity(AVR_RANGE,10) < 60 || movement_detected(10))
+      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG || movement_detected(10))
         schedule_autoclose();
       idle_tasks();
       break;
 
     case STATE_MOTORSTALLED:
-      if(proximity(AVR_RANGE,10) < 60 || movement_detected(10))
+      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG || movement_detected(10))
         schedule_autoclose();
       idle_tasks();
       break;
@@ -164,14 +166,20 @@ void idle_tasks() {
 
 void button_pushed() {
   buttonState = !buttonState;
-  if(buttonState)
+  if(buttonState) {
     digitalWrite(LED_PIN, HIGH);
+    motorSleep();
+  }
   else
     digitalWrite(LED_PIN, LOW);
 }
 
+int measure_proximity(String arg) {
+  return proximity(AVR_RANGE,10);
+}
+
 int proximity(int average_range,int delay_ms) {
-  int sum=0, inches=0, cm=0;
+  float sum=0, inches=0, cm=0;
 
   for (int i = 0; i < average_range ; i++) {
      //Used to read in the analog voltage output that is being sent by the MaxSonar device.
@@ -186,7 +194,7 @@ int proximity(int average_range,int delay_ms) {
 
    inches = sum / average_range;
    cm = inches * 2.54;
-   return cm;
+   return (int)cm;
 }
 
 void setStalled(int nextState) {
