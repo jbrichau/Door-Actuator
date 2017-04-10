@@ -39,6 +39,8 @@
 
 // Set the mode to manual to avoid Particle network busyness during motor runs
 SYSTEM_MODE(MANUAL);
+// Set external antenna (remembered after power off)
+STARTUP(WiFi.selectAntenna(ANT_EXTERNAL));
 
 AccelStepper stepper(AccelStepper::DRIVER, MOTOR_STEP_PIN, MOTOR_DIR_PIN);
 Timer closer(3000, auto_close_door, true);
@@ -48,12 +50,13 @@ int previous_rotation_step = 0;
 int rotation_steps_per_motorrotation = 0;
 int previous_stepper_distance;
 int doorState;
-bool buttonState = false;
+bool buttonState = FALSE;
 int autoopen_position = 0;
 
 //double voltage = 0; // Variable to keep track of LiPo voltage
 double soc = 0; // Variable to keep track of LiPo state-of-charge (SOC)
 bool alert; // Variable to keep track of whether alert has been triggered
+int wifi;
 
 void setup() {
   // Motor
@@ -93,16 +96,16 @@ void setup() {
 
   Particle.connect();
   Particle.variable("doorstate",doorState);
+  Particle.variable("buttonstate",buttonState);
   Particle.variable("rotation",rotation_step);
   Particle.variable("soc",soc);
+  Particle.variable("wifi",wifi);
   Particle.function("opendoor",manual_open_door);
   Particle.function("closedoor",manual_close_door);
   Particle.function("calibrate",manual_calibrate);
   Particle.function("proximity",measure_proximity);
+  Particle.function("reset",resetme);
 
-  if (Particle.connected() == false) {
-    Particle.connect();
-  }
   Serial.begin(9600);
   calibrate();
   //doorState = STATE_OPEN;
@@ -151,16 +154,23 @@ void loop() {
       break;
     }
   }
-  else idle_tasks();
+  else {
+    motorSleep();
+    idle_tasks();
+  }
 }
 
 void idle_tasks() {
-  if(Particle.connected())
-    Particle.process();
-  else
-    Particle.connect();
-
-  soc = lipo.getSOC();
+  if(!buttonState) {
+    if(Particle.connected())
+      Particle.process();
+    else
+      Particle.connect();
+    wifi = WiFi.RSSI();
+    soc = lipo.getSOC();
+  } else {
+    WiFi.off();
+  }
   //Serial.printlnf("position: %d, rotation_step: %d, previous_rotation_step: %d",stepper.currentPosition(), rotation_step, previous_rotation_step);
 }
 
@@ -168,10 +178,11 @@ void button_pushed() {
   buttonState = !buttonState;
   if(buttonState) {
     digitalWrite(LED_PIN, HIGH);
-    motorSleep();
-  }
-  else
+    //WiFi.off();
+  } else {
     digitalWrite(LED_PIN, LOW);
+    //WiFi.on();
+  }
 }
 
 int measure_proximity(String arg) {
@@ -195,6 +206,10 @@ int proximity(int average_range,int delay_ms) {
    inches = sum / average_range;
    cm = inches * 2.54;
    return (int)cm;
+}
+
+int resetme(String arg) {
+  System.reset();
 }
 
 void setStalled(int nextState) {
