@@ -25,7 +25,7 @@
 
 #define SONARPIN A2
 #define AVR_RANGE 60
-#define PROX_ACTIVE_RNG 150
+#define PROX_ACTIVE_RNG 120
 
 #define STEP_FACTOR 2
 #define STEPPER_STEPS 200
@@ -118,7 +118,7 @@ void loop() {
     switch(doorState) {
 
     case STATE_CLOSED:
-      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG) {
+      if(proximity_detected()) {
         setMotorOpening();
         break;
       }
@@ -130,13 +130,13 @@ void loop() {
       break;
 
     case STATE_OPEN:
-      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG || movement_detected(10))
+      if(proximity_detected() || movement_detected(10))
         schedule_autoclose();
       idle_tasks();
       break;
 
     case STATE_MOTORSTALLED:
-      if(proximity(AVR_RANGE,10) < PROX_ACTIVE_RNG || movement_detected(10))
+      if(proximity_detected() || movement_detected(10))
         schedule_autoclose();
       idle_tasks();
       break;
@@ -187,6 +187,14 @@ void button_pushed() {
 
 int measure_proximity(String arg) {
   return proximity(AVR_RANGE,10);
+}
+
+bool proximity_detected() {
+  int p = proximity(AVR_RANGE,10);
+  if(p < PROX_ACTIVE_RNG) {
+    Particle.publish("Proximity detected", String(p), PRIVATE);
+    return true;
+  } else return false;
 }
 
 int proximity(int average_range,int delay_ms) {
@@ -288,6 +296,7 @@ bool movement_detected(int steps) {
   bool movement = abs(abs(rotation_step) - previous_rotation_step) > steps;
   if(movement) {
     //Serial.printlnf("Movement detected of %d > %d",abs(rotation_step) - previous_rotation_step,steps);
+    //Particle.publish("Movement detected", String(abs(abs(rotation_step) - previous_rotation_step)), PRIVATE);
     previous_rotation_step = abs(rotation_step);
   }
   //else
