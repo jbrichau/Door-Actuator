@@ -25,7 +25,7 @@
 
 #define SONARPIN A2
 #define AVR_RANGE 60
-#define PROX_ACTIVE_RNG 120
+#define PROX_ACTIVE_RNG 135
 
 #define STEP_FACTOR 2
 #define STEPPER_STEPS 200
